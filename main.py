@@ -4,7 +4,7 @@ import time
 import torch
 import torch.optim as optim
 from data import load_and_split, prepare_dataset
-from models import GCN, GAT, GraphSAGE
+from models import GCN, GAT, GraphSAGE, AnomalyGCN
 from trainer import Trainer
 from utils import evaluate, save_results
 
@@ -25,11 +25,11 @@ def run_experiment(model_name, dataset_name, trial_num, config):
         dataset_path = prepare_dataset(dataset_name)
     
     # 首次加载显示完整统计
-    data = load_and_split(dataset_path, seed=42)
+    data = load_and_split(dataset_path, seed=42, show_stats=True)
     print(f"\n=== 开始实验 ===")
     print(f"模型: {model_name.upper()}")
     print(f"数据集: {dataset_name.upper()}")
-    print(f"总试验次数: {trial_num}")
+    print(f"总试验次数: {trial_num}\n")
     
     results = []
     best_metrics = {
@@ -39,7 +39,6 @@ def run_experiment(model_name, dataset_name, trial_num, config):
     }
 
     for trial in range(trial_num):
-        print(f"\n{'='*20} Trial {trial+1}/{trial_num} {'='*20}")
         trial_start_time = time.time()
         trial_result = {
             'trial': trial+1,
@@ -49,8 +48,8 @@ def run_experiment(model_name, dataset_name, trial_num, config):
         }
         
         try:
-            # 为每个trial重新分割数据，并显示统计信息
-            data = load_and_split(dataset_path, seed=trial+1, show_stats=True, trial=trial+1)
+            # 为每个trial重新分割数据（不显示统计信息）
+            data = load_and_split(dataset_path, seed=trial+1, show_stats=False)
             data = data.to(device)
             
             # 初始化模型
@@ -66,6 +65,11 @@ def run_experiment(model_name, dataset_name, trial_num, config):
                                 nhid=32,
                                 nclass=1,
                                 dropout=0.5).to(device)
+            elif model_name.lower() == 'anomaly':
+                model = AnomalyGCN(in_dim=data.x.size(1),
+                                hidden_dim=config['hidden_dim'],
+                                k_steps=config['k_steps'],
+                                dropout=config['dropout']).to(device)
             else:
                 raise ValueError(f"不支持的模型类型: {model_name}")
             
@@ -88,13 +92,8 @@ def run_experiment(model_name, dataset_name, trial_num, config):
                     best_metrics[metric]['value'] = test_metrics[metric]
                     best_metrics[metric]['trial'] = trial + 1
             
-            # 打印当前trial的结果
-            print(f"\nTrial {trial+1} 结果:")
-            print(f"AUC: {test_metrics['auc']:.3f}")
-            print(f"AP: {test_metrics['ap']:.3f}")
-            print(f"F1: {test_metrics['f1']:.3f}")
-            print(f"训练轮数: {epochs}")
-            print(f"耗时: {time.time() - trial_start_time:.2f}s")
+            # 打印当前trial的结果（简化格式）
+            print(f"Trial {trial+1}: AUC: {test_metrics['auc']:.3f}, AP: {test_metrics['ap']:.3f}, F1: {test_metrics['f1']:.3f}, Epochs: {epochs}, Time: {time.time() - trial_start_time:.2f}s")
             
             trial_result.update({
                 'status': 'completed',
@@ -110,15 +109,9 @@ def run_experiment(model_name, dataset_name, trial_num, config):
                 'status': f'failed: {str(e)}',
                 'time': round(time.time() - trial_start_time, 3)
             })
-            print(f"\n[Error] Trial {trial+1} 失败: {str(e)}")
+            print(f"Trial {trial+1}: 失败 - {str(e)}")
         
         results.append(trial_result)
-        
-        # 显示当前最佳结果
-        print("\n当前最佳性能:")
-        print(f"最高AUC: {best_metrics['auc']['value']:.3f} (Trial {best_metrics['auc']['trial']})")
-        print(f"最高AP: {best_metrics['ap']['value']:.3f} (Trial {best_metrics['ap']['trial']})")
-        print(f"最高F1: {best_metrics['f1']['value']:.3f} (Trial {best_metrics['f1']['trial']})")
     
     # 添加最佳指标到每个结果中
     for result in results:
@@ -138,11 +131,11 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='图神经网络异常检测')
     parser.add_argument('--model', type=str, default='gcn', 
-                      choices=['gcn', 'gat', 'sage'],
-                      help='选择要使用的模型 (gcn, gat, sage)')
-    parser.add_argument('--dataset', type=str, default='cora',
-                      choices=['cora', 'citeseer', 'pubmed', 'computers', 'reddit'],
-                      help='选择要使用的数据集')
+                      choices=['gcn', 'gat', 'sage', 'anomaly'],
+                      help='选择要使用的模型 (gcn, gat, sage, anomaly)')
+    parser.add_argument('--dataset', type=str, default='reddit',
+                      choices=['tolokers', 'reddit', 'questions', 'weibo', 'amazon', 'yelpchi'],
+                      help='选择要使用的数据集 (tolokers, reddit, questions, weibo, amazon, yelpchi)')
     parser.add_argument('--trials', type=int, default=10,
                       help='实验重复次数')
     args = parser.parse_args()
@@ -156,7 +149,10 @@ def main():
         'delta': 0.00005,
         'warmup_epochs': 10,
         'smooth_window': 3,
-        'max_epochs': 100
+        'max_epochs': 100,
+        # AnomalyGCN特有参数
+        'k_steps': 2,  # 考虑的邻居步数
+        'dropout': 0.3,  # dropout率
     }
     
     run_experiment(args.model, args.dataset, args.trials, config)

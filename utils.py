@@ -49,12 +49,20 @@ def save_results(results, output_dir='results'):
     ]
     df = df[columns_order]
     
+    # 筛选完成的试验
+    completed = df[df['status'] == 'completed']
+    
+    if completed.empty:
+        print("\n[Warning] 没有成功完成的试验")
+        return
+    
     # 保存结果
-    output_path = os.path.join(output_dir, 'results.xlsx')
+    output_path = os.path.join(
+        output_dir, 
+        f'results_{completed["model"].iloc[0]}_{completed["dataset"].iloc[0]}.xlsx')
     df.to_excel(output_path, index=False, float_format='%.3f')
     
     # 打印统计信息
-    completed = df[df['status'] == 'completed']
     print("\n=== 最终统计 ===")
     print(f"模型: {completed['model'].iloc[0]}")
     print(f"数据集: {completed['dataset'].iloc[0]}")
