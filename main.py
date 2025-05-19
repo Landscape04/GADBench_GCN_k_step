@@ -1,142 +1,165 @@
 # main.py
 import os
 import time
-import copy
-import pandas as pd
 import torch
-import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score
-from data import load_and_split
+import torch.optim as optim
+from data import load_and_split, prepare_dataset
 from models import GCN, GAT, GraphSAGE
-from train import train_epoch, validate
-from eval import evaluate
-from train import EarlyStopper
+from trainer import Trainer
+from utils import evaluate, save_results
 
-def main(trial_num=10):
+def run_experiment(model_name, dataset_name, trial_num, config):
+    """运行实验
+    
+    Args:
+        model_name: 模型名称
+        dataset_name: 数据集名称
+        trial_num: 实验重复次数
+        config: 配置参数
+    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    config = {
-        'hidden_dim': 128,
-        'lr': 0.005,
-        'weight_decay': 1e-4,
-        'patience': 10,
-        'max_epochs': 100
-    }
+    
+    # 预先加载数据
+    dataset_path = os.path.join('datasets', f"{dataset_name}.pt")
+    if not os.path.exists(dataset_path):
+        dataset_path = prepare_dataset(dataset_name)
+    
+    # 首次加载显示完整统计
+    data = load_and_split(dataset_path, seed=42)
+    print(f"\n=== 开始实验 ===")
+    print(f"模型: {model_name.upper()}")
+    print(f"数据集: {dataset_name.upper()}")
+    print(f"总试验次数: {trial_num}")
     
     results = []
-    start_time = 0
+    best_metrics = {
+        'auc': {'value': 0.0, 'trial': 0},
+        'ap': {'value': 0.0, 'trial': 0},
+        'f1': {'value': 0.0, 'trial': 0}
+    }
 
     for trial in range(trial_num):
-        trial_result = {'trial': trial+1, 'status': 'pending'}
+        print(f"\n{'='*20} Trial {trial+1}/{trial_num} {'='*20}")
+        trial_start_time = time.time()
+        trial_result = {
+            'trial': trial+1,
+            'status': 'pending',
+            'model': model_name.upper(),
+            'dataset': dataset_name.upper()
+        }
+        
         try:
-            # 加载数据
-            data = load_and_split('datasets/reddit.pt', seed=trial+1)
+            # 为每个trial重新分割数据，并显示统计信息
+            data = load_and_split(dataset_path, seed=trial+1, show_stats=True, trial=trial+1)
             data = data.to(device)
-
-            features = data.x    # 节点特征矩阵 [num_nodes, num_features]
-            num_classes = len(torch.unique(data.y))
-            
-            # ========== 关键修复部分 ==========
-            # 计算类别权重
-            train_labels = data.y[data.train_mask]
-            num_pos = train_labels.sum().item()
-            num_neg = len(train_labels) - num_pos
-            
-            if num_pos == 0 or num_neg == 0:
-                raise ValueError(f"类别不平衡异常: 正样本={num_pos}, 负样本={num_neg}")
-                
-            pos_weight = torch.tensor([num_neg / num_pos], dtype=torch.float32, device=device)
-            # ==================================
             
             # 初始化模型
-            # model = GCN(data.x.size(1), config['hidden_dim']).to(device)
-
-            model = GAT(nfeat=features.shape[1], 
-                        nhid=16,
-                        nclass=num_classes)
-
-            # model = GraphSAGE(nfeat=features.shape[1],
-            #                 nhid=16,
-            #                 nclass=num_classes)
+            if model_name.lower() == 'gcn':
+                model = GCN(data.x.size(1), config['hidden_dim']).to(device)
+            elif model_name.lower() == 'gat':
+                model = GAT(nfeat=data.x.size(1), 
+                          nhid=32,
+                          nclass=1,
+                          dropout=0.5).to(device)
+            elif model_name.lower() == 'sage':
+                model = GraphSAGE(nfeat=data.x.size(1),
+                                nhid=32,
+                                nclass=1,
+                                dropout=0.5).to(device)
+            else:
+                raise ValueError(f"不支持的模型类型: {model_name}")
             
-            optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], 
-                                        weight_decay=config['weight_decay'])
-            criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            # 初始化优化器
+            optimizer = optim.AdamW(model.parameters(), 
+                                  lr=config['lr'],
+                                  weight_decay=config['weight_decay'])
             
-            # 训练循环
-            stopper = EarlyStopper(
-                initial_model=model,
-                patience=20, 
-                delta=0.00005,
-                warmup_epochs=10,
-                smooth_window=3
-            )
-            for epoch in range(config['max_epochs']):
-                # 训练步骤
-                model.train()
-                optimizer.zero_grad()
-                out = model(data.x, data.edge_index)
-                loss = F.binary_cross_entropy_with_logits(
-                    out[data.train_mask], 
-                    data.y[data.train_mask].float(),
-                    pos_weight=pos_weight
-                )
-                loss.backward()
-                optimizer.step()
-                
-                # 每个epoch验证（官方频率）
-                model.eval()
-                with torch.no_grad():
-                    val_out = model(data.x, data.edge_index)
-                    val_pred = torch.sigmoid(val_out[data.val_mask])
-                    val_auc = roc_auc_score(data.y[data.val_mask].cpu(), val_pred.cpu())
-                    
-                # 早停检查
-                if stopper.step(val_auc):
-                    print(f"Early stopping at epoch {epoch+1}, Best AUC: {stopper.best_metric:.4f}")
-                    break
-                
-            # 加载最佳模型（官方恢复方式）
-                if stopper.best_model:
-                    model.load_state_dict(stopper.best_model)
-                else:
-                    print("使用最终epoch的模型参数")
-                    final_model = copy.deepcopy(model)                
-            # 最终测试
-            test_logits = validate(model, data, device)
+            # 训练模型
+            trainer = Trainer(model, optimizer, device, config)
+            epochs = trainer.train(data, trial+1)
+            
+            # 测试评估
+            test_logits = trainer.test(data)
             test_metrics = evaluate(data.y.cpu(), test_logits, data.test_mask.cpu())
+            
+            # 更新最佳指标
+            for metric in ['auc', 'ap', 'f1']:
+                if test_metrics[metric] > best_metrics[metric]['value']:
+                    best_metrics[metric]['value'] = test_metrics[metric]
+                    best_metrics[metric]['trial'] = trial + 1
+            
+            # 打印当前trial的结果
+            print(f"\nTrial {trial+1} 结果:")
+            print(f"AUC: {test_metrics['auc']:.3f}")
+            print(f"AP: {test_metrics['ap']:.3f}")
+            print(f"F1: {test_metrics['f1']:.3f}")
+            print(f"训练轮数: {epochs}")
+            print(f"耗时: {time.time() - trial_start_time:.2f}s")
             
             trial_result.update({
                 'status': 'completed',
-                'test_auc': test_metrics['auc'],
-                'test_ap': test_metrics['ap'],
-                'test_f1': test_metrics['f1'],
-                'epochs': epoch+1,
-                'time': time.time()-start_time
+                'test_auc': round(test_metrics['auc'], 3),
+                'test_ap': round(test_metrics['ap'], 3),
+                'test_f1': round(test_metrics['f1'], 3),
+                'epochs': epochs,
+                'time': round(time.time() - trial_start_time, 3)
             })
             
         except Exception as e:
             trial_result.update({
                 'status': f'failed: {str(e)}',
-                'time': time.time()-start_time
+                'time': round(time.time() - trial_start_time, 3)
             })
-            print(f"\n[Error] 试验 {trial+1} 失败: {str(e)}")
+            print(f"\n[Error] Trial {trial+1} 失败: {str(e)}")
         
         results.append(trial_result)
+        
+        # 显示当前最佳结果
+        print("\n当前最佳性能:")
+        print(f"最高AUC: {best_metrics['auc']['value']:.3f} (Trial {best_metrics['auc']['trial']})")
+        print(f"最高AP: {best_metrics['ap']['value']:.3f} (Trial {best_metrics['ap']['trial']})")
+        print(f"最高F1: {best_metrics['f1']['value']:.3f} (Trial {best_metrics['f1']['trial']})")
+    
+    # 添加最佳指标到每个结果中
+    for result in results:
+        result.update({
+            'best_auc': round(best_metrics['auc']['value'], 3),
+            'best_auc_trial': best_metrics['auc']['trial'],
+            'best_ap': round(best_metrics['ap']['value'], 3),
+            'best_ap_trial': best_metrics['ap']['trial'],
+            'best_f1': round(best_metrics['f1']['value'], 3),
+            'best_f1_trial': best_metrics['f1']['trial']
+        })
     
     # 保存结果
-    df = pd.DataFrame(results)
-    os.makedirs('results', exist_ok=True)
-    df.to_excel('results/results.xlsx', index=False)
+    save_results(results)
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='图神经网络异常检测')
+    parser.add_argument('--model', type=str, default='gcn', 
+                      choices=['gcn', 'gat', 'sage'],
+                      help='选择要使用的模型 (gcn, gat, sage)')
+    parser.add_argument('--dataset', type=str, default='cora',
+                      choices=['cora', 'citeseer', 'pubmed', 'computers', 'reddit'],
+                      help='选择要使用的数据集')
+    parser.add_argument('--trials', type=int, default=10,
+                      help='实验重复次数')
+    args = parser.parse_args()
     
-    # 打印统计
-    completed = df[df['status'] == 'completed']
-    print("\n=== 最终统计 ===")
-    print(f"完成试验数: {len(completed)}/{trial_num}")
-    if not completed.empty:
-        print(f"平均AUC: {completed['test_auc'].mean():.4f} ± {completed['test_auc'].std():.4f}")
-        print(f"平均AP: {completed['test_ap'].mean():.4f} ± {completed['test_ap'].std():.4f}")
-        print(f"平均F1: {completed['test_f1'].mean():.4f} ± {completed['test_f1'].std():.4f}")
-        print(f"平均耗时: {completed['time'].mean():.1f}s/试验")
+    # 配置参数
+    config = {
+        'hidden_dim': 128,
+        'lr': 0.005,
+        'weight_decay': 1e-4,
+        'patience': 20,
+        'delta': 0.00005,
+        'warmup_epochs': 10,
+        'smooth_window': 3,
+        'max_epochs': 100
+    }
+    
+    run_experiment(args.model, args.dataset, args.trials, config)
 
 if __name__ == "__main__":
-    main(trial_num=10)
+    main()

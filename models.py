@@ -27,24 +27,30 @@ class GCN(nn.Module):
         return x.squeeze()
     
 class GAT(nn.Module):
-    def __init__(self, nfeat, nhid, nclass, heads=8):
+    def __init__(self, nfeat, nhid, nclass, heads=8, dropout=0.6):
         super().__init__()
-        self.gat1 = GATConv(nfeat, nhid, heads)
-        self.gat2 = GATConv(nhid, nclass, heads=1)
-        self.dropout = nn.Dropout(0.6)
+        self.gat1 = GATConv(nfeat, nhid, heads=heads)
+        # 第二层将多头注意力的输出合并为单个向量
+        self.gat2 = GATConv(nhid * heads, 1, heads=1)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, edge_index):
         x = self.dropout(x)
         x = F.elu(self.gat1(x, edge_index))
         x = self.dropout(x)
-        return F.log_softmax(self.gat2(x, edge_index), dim=1)
+        x = self.gat2(x, edge_index)
+        return x.squeeze(1)  # 移除最后一个维度，使输出形状与二分类任务匹配
 
 class GraphSAGE(nn.Module):
-    def __init__(self, nfeat, nhid, nclass):
+    def __init__(self, nfeat, nhid, nclass, dropout=0.5):
         super().__init__()
         self.sage1 = SAGEConv(nfeat, nhid)
-        self.sage2 = SAGEConv(nhid, nclass)
+        self.sage2 = SAGEConv(nhid, 1)  # 改为输出1维
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, edge_index):
-        x = self.sage1(x, edge_index)
-        return F.log_softmax(self.sage2(x, edge_index), dim=1)
+        x = self.dropout(x)
+        x = F.relu(self.sage1(x, edge_index))
+        x = self.dropout(x)
+        x = self.sage2(x, edge_index)
+        return x.squeeze(1)  # 确保输出维度正确
