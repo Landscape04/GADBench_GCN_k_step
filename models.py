@@ -56,6 +56,166 @@ class GraphSAGE(nn.Module):
         x = self.sage2(x, edge_index)
         return x.squeeze(1)  # 确保输出维度正确
 
+class MultiHopGCN(nn.Module):
+    """基础多跳聚合模型
+    
+    特点：
+    1. 简单的多跳邻居信息聚合
+    2. 每一跳使用独立的GCN层
+    3. 通过跳数控制感受野大小
+    """
+    def __init__(self, in_dim, hidden_dim=128, k_hops=2, dropout=0.3):
+        super().__init__()
+        self.k_hops = k_hops
+        
+        # 初始特征转换
+        self.input_transform = nn.Linear(in_dim, hidden_dim)
+        
+        # k跳GCN层
+        self.hop_convs = nn.ModuleList([
+            GCNConv(hidden_dim, hidden_dim) for _ in range(k_hops)
+        ])
+        
+        # 输出层
+        self.output = nn.Linear(hidden_dim * (k_hops + 1), 1)  # +1是为了包含初始特征
+        
+        self.dropout = dropout
+        self.reset_parameters()
+        
+    def reset_parameters(self):
+        """初始化模型参数"""
+        nn.init.kaiming_normal_(self.input_transform.weight)
+        nn.init.zeros_(self.input_transform.bias)
+        nn.init.kaiming_normal_(self.output.weight)
+        nn.init.zeros_(self.output.bias)
+        for conv in self.hop_convs:
+            conv.reset_parameters()
+    
+    def forward(self, x, edge_index):
+        # 1. 初始特征转换
+        h = F.relu(self.input_transform(x))
+        h = F.dropout(h, p=self.dropout, training=self.training)
+        
+        # 存储每一跳的特征
+        all_hop_features = [h]
+        
+        # 2. 逐跳聚合邻居信息
+        current_h = h
+        for hop in range(self.k_hops):
+            # 使用GCN层聚合邻居
+            current_h = self.hop_convs[hop](current_h, edge_index)
+            current_h = F.relu(current_h)
+            current_h = F.dropout(current_h, p=self.dropout, training=self.training)
+            all_hop_features.append(current_h)
+        
+        # 3. 拼接所有跳数的特征
+        final_h = torch.cat(all_hop_features, dim=1)
+        
+        # 4. 输出异常分数
+        out = self.output(final_h)
+        return out.squeeze()
+
+class SelectiveMultiHopGCN(nn.Module):
+    """带节点筛选的多跳聚合模型
+    
+    特点：
+    1. 继承基础多跳聚合的优点
+    2. 增加节点重要性评估
+    3. 基于节点重要性进行邻居筛选
+    4. 自适应调整每个节点的聚合范围
+    """
+    def __init__(self, in_dim, hidden_dim=128, k_hops=2, dropout=0.3):
+        super().__init__()
+        self.k_hops = k_hops
+        
+        # 初始特征转换
+        self.input_transform = nn.Linear(in_dim, hidden_dim)
+        
+        # 节点重要性评估网络
+        self.importance_net = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Sigmoid()
+        )
+        
+        # k跳GCN层
+        self.hop_convs = nn.ModuleList([
+            GCNConv(hidden_dim, hidden_dim) for _ in range(k_hops)
+        ])
+        
+        # 输出层
+        self.output = nn.Linear(hidden_dim * (k_hops + 1), 1)
+        
+        self.dropout = dropout
+        self.reset_parameters()
+        
+    def reset_parameters(self):
+        """初始化模型参数"""
+        nn.init.kaiming_normal_(self.input_transform.weight)
+        nn.init.zeros_(self.input_transform.bias)
+        nn.init.kaiming_normal_(self.output.weight)
+        nn.init.zeros_(self.output.bias)
+        for m in self.importance_net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        for conv in self.hop_convs:
+            conv.reset_parameters()
+    
+    def _compute_node_importance(self, x):
+        """计算节点重要性分数"""
+        return self.importance_net(x)
+    
+    def _filter_neighbors(self, x, edge_index):
+        """基于节点重要性筛选邻居"""
+        # 计算所有节点的重要性分数
+        importance_scores = self._compute_node_importance(x)  # [N, 1]
+        
+        # 获取边的源节点和目标节点
+        row, col = edge_index  # [2, E]
+        
+        # 计算边的权重（基于源节点和目标节点的重要性）
+        edge_weights = (importance_scores[row] + importance_scores[col]) / 2  # [E, 1]
+        
+        # 设置自适应阈值（使用均值加标准差）
+        threshold = edge_weights.mean() + edge_weights.std()
+        
+        # 筛选重要的边
+        mask = edge_weights.squeeze() > threshold  # [E]
+        filtered_edge_index = edge_index[:, mask]  # [2, E']
+        
+        return filtered_edge_index, edge_weights[mask]
+    
+    def forward(self, x, edge_index):
+        # 1. 初始特征转换
+        h = F.relu(self.input_transform(x))  # [N, hidden_dim]
+        h = F.dropout(h, p=self.dropout, training=self.training)
+        
+        # 存储每一跳的特征
+        all_hop_features = [h]  # [[N, hidden_dim], ...]
+        
+        # 2. 基于节点重要性筛选邻居
+        filtered_edge_index, _ = self._filter_neighbors(h, edge_index)  # [2, E'], [E']
+        
+        # 3. 逐跳聚合邻居信息
+        current_h = h
+        for hop in range(self.k_hops):
+            # 使用筛选后的边进行消息传递
+            current_h = self.hop_convs[hop](current_h, filtered_edge_index)  # [N, hidden_dim]
+            current_h = F.relu(current_h)
+            current_h = F.dropout(current_h, p=self.dropout, training=self.training)
+            all_hop_features.append(current_h)
+        
+        # 4. 拼接所有跳数的特征
+        final_h = torch.cat(all_hop_features, dim=1)  # [N, hidden_dim * (k_hops + 1)]
+        
+        # 5. 输出异常分数
+        out = self.output(final_h)  # [N, 1]
+        return out.squeeze()  # [N]
+
 class AnomalyGCN(nn.Module):
     def __init__(self, in_dim, hidden_dim=128, k_steps=2, dropout=0.3):
         """异常感知的GCN模型

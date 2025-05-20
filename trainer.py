@@ -119,7 +119,7 @@ class Trainer:
             
             # 早停检查
             if self.stopper.step(val_auc, self.model):
-                print(f"Trial {trial_num}: Early stopping at epoch {epoch+1}, Best AUC: {self.stopper.best_metric:.4f}")
+                print(f"Trial {trial_num}: Early stopping at epoch {epoch+1}, Best Val AUC: {self.stopper.best_metric:.4f}")
                 break
         
         # 加载最佳模型

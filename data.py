@@ -1,55 +1,16 @@
 """
 数据加载和预处理模块
 
-支持的数据集(按计算复杂度从低到高排序):
-
-1. Tolokers (复杂度: 低)
-   - 节点数: 11,758
-   - 边数: 519,000
-   - 特征维度: 10
-   - 异常比例: 21.8%
-   - 描述: 工作协作关系异常检测
-   - 特点: 低维特征，数据规模小，适合快速实验
-
-2. Reddit (复杂度: 中低)
-   - 节点数: 10,984
-   - 边数: 168,016
-   - 特征维度: 64
-   - 异常比例: 3.3%
-   - 描述: 社交网络异常用户检测
-   - 特点: 特征维度适中，边密度适中
-
-3. Questions (复杂度: 中)
-   - 节点数: 48,921
-   - 边数: 153,540
-   - 特征维度: 301
-   - 异常比例: 3.0%
-   - 描述: 问答系统异常检测
-   - 特点: 节点数适中，高维特征
-
-4. Weibo (复杂度: 中高)
-   - 节点数: 8,405
-   - 边数: 407,963
-   - 特征维度: 400
-   - 异常比例: 10.3%
-   - 描述: 微博平台异常用户检测
-   - 特点: 超高维特征，边密度较高
-
-5. Amazon (复杂度: 高)
-   - 节点数: 11,944
-   - 边数: 4,398,392
-   - 特征维度: 25
-   - 异常比例: 9.5%
-   - 描述: 电商评论异常检测
-   - 特点: 边密度极高，图结构复杂
-
-6. YelpChi (复杂度: 极高)
-   - 节点数: 45,954
-   - 边数: 3,846,979
-   - 特征维度: 32
-   - 异常比例: 14.5%
-   - 描述: 餐厅评论异常检测
-   - 特点: 大规模节点，高边密度
+支持的数据集:
+1. Cora (2708节点)
+2. Citeseer (3327节点)
+3. PubMed (19717节点)
+4. Amazon Computers (13752节点)
+5. Weibo (8,405节点)
+6. Reddit (10,984节点)
+7. Questions (48,921节点)
+8. Amazon (11,944节点)
+9. YelpChi (45,954节点)
 """
 
 import os
@@ -60,100 +21,41 @@ from torch_geometric.data import Data
 from torch_geometric.transforms import NormalizeFeatures
 from torch_geometric.utils import to_undirected
 from sklearn.preprocessing import StandardScaler
-import urllib.request
-import zipfile
+from torch_geometric.data.storage import GlobalStorage
+from torch.serialization import add_safe_globals
 
-def download_dataset(name, root='datasets'):
-    """下载并解压数据集
+# 添加PyG的数据类型到安全加载列表
+add_safe_globals([GlobalStorage])
+
+def prepare_dataset(name, root='datasets'):
+    """准备数据集
     
     Args:
-        name: 数据集名称 ('reddit', 'weibo', 'tolokers', 'questions', 'amazon', 'yelpchi')
+        name: 数据集名称
         root: 数据存储路径
+    
+    Returns:
+        str: 数据集文件路径
     """
-    os.makedirs(root, exist_ok=True)
+    name = name.lower()
+    processed_path = os.path.join(root, f"{name}.pt")
     
-    # 数据集URL映射
-    dataset_urls = {
-        'reddit': 'https://raw.githubusercontent.com/pygod-team/data/main/reddit.pt.zip',
-        'weibo': 'https://raw.githubusercontent.com/pygod-team/data/main/weibo.pt.zip',
-        'tolokers': 'https://data.dgl.ai/dataset/tolokers.zip',
-        'questions': 'https://data.dgl.ai/dataset/questions.zip',
-        'amazon': 'https://data.dgl.ai/dataset/fraud/amazon.zip',
-        'yelpchi': 'https://data.dgl.ai/dataset/fraud/yelp.zip'
-    }
+    if not os.path.exists(processed_path):
+        raise FileNotFoundError(
+            f"数据集文件 {processed_path} 不存在。\n"
+            f"请先下载数据集到 {root} 目录。\n"
+            "您可以使用 download_gadbench_datasets.py 脚本下载数据集。"
+        )
     
-    if name.lower() not in dataset_urls:
-        raise ValueError(f"不支持的数据集: {name}")
+    # 验证数据集格式
+    try:
+        data_dict = torch.load(processed_path, map_location='cpu', weights_only=True)
+        if not all(k in data_dict for k in ['x', 'edge_index', 'y']):
+            raise ValueError("数据集格式不正确，缺少必要的字段")
+    except Exception as e:
+        raise ValueError(f"数据集文件损坏或格式不正确: {str(e)}")
     
-    url = dataset_urls[name.lower()]
-    zip_filename = os.path.join(root, f"{name.lower()}.zip")
-    pt_filename = os.path.join(root, f"{name.lower()}.pt")
-    
-    if not os.path.exists(pt_filename):
-        print(f"下载数据集 {name}...")
-        
-        # 设置请求头
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # 创建请求
-        req = urllib.request.Request(url, headers=headers)
-        
-        try:
-            # 下载文件
-            with urllib.request.urlopen(req) as response, open(zip_filename, 'wb') as out_file:
-                data = response.read()
-                out_file.write(data)
-            
-            print("下载完成，正在解压...")
-            
-            # 解压zip文件
-            with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
-                zip_ref.extractall(root)
-                
-            # 删除zip文件
-            os.remove(zip_filename)
-            print("解压完成")
-            
-        except urllib.error.HTTPError as e:
-            print(f"下载失败 (HTTP {e.code}): {e.reason}")
-            print("尝试使用备用下载源...")
-            
-            # 备用下载源
-            backup_urls = {
-                'tolokers': 'https://github.com/dmlc/dgl/raw/master/dataset/tolokers.zip',
-                'questions': 'https://github.com/dmlc/dgl/raw/master/dataset/questions.zip',
-                'amazon': 'https://github.com/dmlc/dgl/raw/master/dataset/fraud/amazon.zip',
-                'yelpchi': 'https://github.com/dmlc/dgl/raw/master/dataset/fraud/yelp.zip'
-            }
-            
-            if name.lower() in backup_urls:
-                backup_url = backup_urls[name.lower()]
-                req = urllib.request.Request(backup_url, headers=headers)
-                
-                try:
-                    with urllib.request.urlopen(req) as response, open(zip_filename, 'wb') as out_file:
-                        data = response.read()
-                        out_file.write(data)
-                    
-                    print("备用源下载完成，正在解压...")
-                    
-                    with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
-                        zip_ref.extractall(root)
-                    
-                    os.remove(zip_filename)
-                    print("解压完成")
-                    
-                except Exception as e2:
-                    raise Exception(f"备用源下载也失败了: {str(e2)}")
-            else:
-                raise e
-        
-        except Exception as e:
-            raise Exception(f"下载失败: {str(e)}")
-    
-    return pt_filename
+    return processed_path
 
 def load_pt_dataset(file_path):
     """加载.pt格式的数据集
@@ -180,123 +82,6 @@ def load_pt_dataset(file_path):
     
     return Data(x=x, edge_index=edge_index, y=y)
 
-def get_dataset_complexity(name):
-    """获取数据集的复杂度信息
-    
-    Args:
-        name: 数据集名称
-    
-    Returns:
-        dict: 包含复杂度信息的字典
-    """
-    complexity_info = {
-        'tolokers': {
-            'complexity': 'low',
-            'description': '低维特征，数据规模小，适合快速实验',
-            'estimated_memory': '2GB'
-        },
-        'reddit': {
-            'complexity': 'medium-low',
-            'description': '特征维度适中，边密度适中',
-            'estimated_memory': '4GB'
-        },
-        'questions': {
-            'complexity': 'medium',
-            'description': '节点数适中，高维特征',
-            'estimated_memory': '4GB'
-        },
-        'weibo': {
-            'complexity': 'medium-high',
-            'description': '超高维特征，边密度较高',
-            'estimated_memory': '8GB'
-        },
-        'amazon': {
-            'complexity': 'high',
-            'description': '边密度极高，图结构复杂',
-            'estimated_memory': '8GB'
-        },
-        'yelpchi': {
-            'complexity': 'very-high',
-            'description': '大规模节点，高边密度',
-            'estimated_memory': '16GB'
-        }
-    }
-    
-    name = name.lower()
-    if name in complexity_info:
-        return complexity_info[name]
-    else:
-        raise ValueError(f"未知数据集: {name}")
-
-def prepare_dataset(name, root='datasets', check_resources=True):
-    """准备数据集（下载、处理和保存）
-    
-    Args:
-        name: 数据集名称
-        root: 数据存储路径
-        check_resources: 是否检查资源需求
-    
-    Returns:
-        处理后的数据集文件路径
-    """
-    if check_resources:
-        # 检查复杂度信息
-        complexity = get_dataset_complexity(name)
-        print(f"\n=== 数据集复杂度信息 ===")
-        print(f"复杂度等级: {complexity['complexity']}")
-        print(f"特点: {complexity['description']}")
-        print(f"预估内存需求: {complexity['estimated_memory']}")
-        
-        if complexity['complexity'] in ['high', 'very-high']:
-            print("\n注意: 该数据集计算复杂度较高，处理时间可能较长")
-            if not torch.cuda.is_available():
-                print("建议使用GPU进行加速")
-            response = input("是否继续? [y/N]: ")
-            if response.lower() != 'y':
-                raise ValueError("用户取消操作")
-    
-    os.makedirs(root, exist_ok=True)
-    name = name.lower()
-    processed_path = os.path.join(root, f"{name}.pt")
-    
-    # 检查是否已存在处理好的数据集
-    if os.path.exists(processed_path):
-        print(f"\n发现本地缓存数据集: {processed_path}")
-        try:
-            # 验证缓存数据是否完整
-            data_dict = torch.load(processed_path, map_location='cpu', weights_only=True)
-            if all(k in data_dict for k in ['x', 'edge_index', 'y']):
-                print("缓存数据验证成功，直接加载本地数据集...")
-                return processed_path
-            else:
-                print("缓存数据不完整，重新处理数据集...")
-        except Exception as e:
-            print(f"缓存数据加载失败 ({str(e)})，重新处理数据集...")
-    else:
-        print(f"\n未找到本地缓存，开始下载和处理数据集: {name}")
-    
-    # 下载并加载数据集
-    file_path = download_dataset(name, root)
-    data = load_pt_dataset(file_path)
-    
-    # 打印数据集信息
-    print(f"\n=== 数据集: {name.upper()} ===")
-    print(f"节点数: {data.num_nodes}")
-    print(f"边数: {data.num_edges}")
-    print(f"特征维度: {data.num_features}")
-    print(f"异常比例: {data.y.float().mean().item():.2%}")
-    
-    # 保存处理后的数据集
-    print(f"\n保存处理后的数据集...")
-    torch.save({
-        'x': data.x,
-        'edge_index': data.edge_index,
-        'y': data.y
-    }, processed_path)
-    
-    print(f"数据集已保存至: {processed_path}")
-    return processed_path
-
 def load_and_split(data_path, train_ratio=0.4, seed=42, show_stats=True):
     """加载并分割数据集
     
@@ -314,8 +99,13 @@ def load_and_split(data_path, train_ratio=0.4, seed=42, show_stats=True):
     Returns:
         PyG数据对象，包含训练、验证和测试掩码
     """
-    # 加载数据
-    data_dict = torch.load(data_path, map_location='cpu')
+    try:
+        # 首先尝试使用weights_only=True加载
+        data_dict = torch.load(data_path, map_location='cpu', weights_only=True)
+    except Exception as e:
+        # 如果失败，尝试完整加载
+        print("警告: weights_only加载失败，尝试完整加载...")
+        data_dict = torch.load(data_path, map_location='cpu')
     
     # 数据验证
     required_keys = ['x', 'edge_index', 'y']
@@ -360,8 +150,9 @@ def load_and_split(data_path, train_ratio=0.4, seed=42, show_stats=True):
                test_mask=test_mask)
 
 def get_available_datasets():
-    """获取所有可用的数据集列表，按复杂度排序"""
-    return ['tolokers', 'reddit', 'questions', 'weibo', 'amazon', 'yelpchi']
+    """获取所有可用的数据集列表"""
+    return ['cora', 'citeseer', 'pubmed', 'amazon_computers', 
+            'weibo', 'reddit', 'questions', 'amazon', 'yelpchi']
 
 def get_available_models():
     """获取所有可用的模型列表"""
@@ -375,8 +166,7 @@ def process_single_dataset(dataset, models=None):
         models: 要运行的模型列表，如果为None则不运行模型
     """
     try:
-        complexity = get_dataset_complexity(dataset)
-        print(f"\n开始处理 {dataset.upper()} (复杂度: {complexity['complexity']})")
+        print(f"\n开始处理 {dataset.upper()}")
         data_path = prepare_dataset(dataset)
         print(f"数据集处理完成: {data_path}")
         
@@ -401,8 +191,7 @@ def process_single_model(model, datasets=None):
     print(f"\n使用模型 {model} 处理以下数据集: {', '.join(datasets)}")
     for dataset in datasets:
         try:
-            complexity = get_dataset_complexity(dataset)
-            print(f"\n处理数据集 {dataset.upper()} (复杂度: {complexity['complexity']})")
+            print(f"\n处理数据集 {dataset.upper()}")
             data_path = prepare_dataset(dataset)
             print(f"数据集处理完成: {data_path}")
             # TODO: 这里可以添加模型训练的代码
@@ -432,8 +221,7 @@ if __name__ == "__main__":
     if args.list:
         print("\n=== 可用的数据集 ===")
         for dataset in get_available_datasets():
-            complexity = get_dataset_complexity(dataset)
-            print(f"- {dataset} (复杂度: {complexity['complexity']})")
+            print(f"- {dataset}")
         
         print("\n=== 可用的模型 ===")
         for model in get_available_models():

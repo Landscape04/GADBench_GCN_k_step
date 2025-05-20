@@ -4,7 +4,7 @@ import time
 import torch
 import torch.optim as optim
 from data import load_and_split, prepare_dataset
-from models import GCN, GAT, GraphSAGE, AnomalyGCN
+from models import GCN, GAT, GraphSAGE, MultiHopGCN, SelectiveMultiHopGCN, AnomalyGCN
 from trainer import Trainer
 from utils import evaluate, save_results
 
@@ -65,6 +65,16 @@ def run_experiment(model_name, dataset_name, trial_num, config):
                                 nhid=32,
                                 nclass=1,
                                 dropout=0.5).to(device)
+            elif model_name.lower() == 'multihop':
+                model = MultiHopGCN(in_dim=data.x.size(1),
+                                  hidden_dim=config['hidden_dim'],
+                                  k_hops=config['k_hops'],
+                                  dropout=config['dropout']).to(device)
+            elif model_name.lower() == 'selective':
+                model = SelectiveMultiHopGCN(in_dim=data.x.size(1),
+                                           hidden_dim=config['hidden_dim'],
+                                           k_hops=config['k_hops'],
+                                           dropout=config['dropout']).to(device)
             elif model_name.lower() == 'anomaly':
                 model = AnomalyGCN(in_dim=data.x.size(1),
                                 hidden_dim=config['hidden_dim'],
@@ -131,8 +141,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='图神经网络异常检测')
     parser.add_argument('--model', type=str, default='gcn', 
-                      choices=['gcn', 'gat', 'sage', 'anomaly'],
-                      help='选择要使用的模型 (gcn, gat, sage, anomaly)')
+                      choices=['gcn', 'gat', 'sage', 'multihop', 'selective', 'anomaly'],
+                      help='选择要使用的模型 (gcn, gat, sage, multihop, selective, anomaly)')
     parser.add_argument('--dataset', type=str, default='reddit',
                       choices=['tolokers', 'reddit', 'questions', 'weibo', 'amazon', 'yelpchi'],
                       help='选择要使用的数据集 (tolokers, reddit, questions, weibo, amazon, yelpchi)')
@@ -150,9 +160,10 @@ def main():
         'warmup_epochs': 10,
         'smooth_window': 3,
         'max_epochs': 100,
-        # AnomalyGCN特有参数
-        'k_steps': 2,  # 考虑的邻居步数
-        'dropout': 0.3,  # dropout率
+        # 多跳模型参数
+        'k_hops': 2,      # 多跳模型的跳数
+        'k_steps': 2,     # AnomalyGCN的步数
+        'dropout': 0.3,   # dropout率
     }
     
     run_experiment(args.model, args.dataset, args.trials, config)
