@@ -102,9 +102,8 @@ def run_experiment(model_name, dataset_name, trial_num, config):
                     best_metrics[metric]['value'] = test_metrics[metric]
                     best_metrics[metric]['trial'] = trial + 1
 
-            # 打印当前trial的结果
-            trial_time = time.time() - trial_start_time
-            print(f"Trial {trial+1}: AUC: {test_metrics['auc']:.3f}, AP: {test_metrics['ap']:.3f}, F1: {test_metrics['f1']:.3f}, Epochs: {epochs}, Time: {trial_time:.2f}s")
+            # 打印当前trial的结果（简化格式）
+            print(f"Trial {trial+1}: AUC: {test_metrics['auc']:.3f}, AP: {test_metrics['ap']:.3f}, F1: {test_metrics['f1']:.3f}, Epochs: {epochs}, Time: {time.time() - trial_start_time:.2f}s")
 
             trial_result.update({
                 'status': 'completed',
@@ -124,30 +123,6 @@ def run_experiment(model_name, dataset_name, trial_num, config):
 
         results.append(trial_result)
 
-    # 计算平均指标
-    avg_metrics = {
-        'auc': 0.0,
-        'ap': 0.0,
-        'f1': 0.0,
-        'epochs': 0,
-        'time': 0.0,
-        'completed_trials': 0
-    }
-
-    for result in results:
-        if result['status'] == 'completed':
-            avg_metrics['auc'] += result['test_auc']
-            avg_metrics['ap'] += result['test_ap']
-            avg_metrics['f1'] += result['test_f1']
-            avg_metrics['epochs'] += result['epochs']
-            avg_metrics['time'] += result['time']
-            avg_metrics['completed_trials'] += 1
-
-    # 计算平均值
-    if avg_metrics['completed_trials'] > 0:
-        for key in ['auc', 'ap', 'f1', 'epochs', 'time']:
-            avg_metrics[key] /= avg_metrics['completed_trials']
-
     # 添加最佳指标到每个结果中
     for result in results:
         result.update({
@@ -159,19 +134,13 @@ def run_experiment(model_name, dataset_name, trial_num, config):
             'best_f1_trial': best_metrics['f1']['trial']
         })
 
-    # 打印汇总结果
-    print("\n=== 实验结果汇总 ===")
-    print(f"完成试验数: {avg_metrics['completed_trials']}/{trial_num}")
-    print(f"平均 AUC: {avg_metrics['auc']:.3f}, 最佳 AUC: {best_metrics['auc']['value']:.3f} (Trial {best_metrics['auc']['trial']})")
-    print(f"平均 AP: {avg_metrics['ap']:.3f}, 最佳 AP: {best_metrics['ap']['value']:.3f} (Trial {best_metrics['ap']['trial']})")
-    print(f"平均 F1: {avg_metrics['f1']:.3f}, 最佳 F1: {best_metrics['f1']['value']:.3f} (Trial {best_metrics['f1']['trial']})")
-    print(f"平均训练轮次: {avg_metrics['epochs']:.1f}, 平均耗时: {avg_metrics['time']:.2f}s")
-
     # 保存结果
     save_results(results)
 
 def main():
     import argparse
+    from data import get_available_models
+
     parser = argparse.ArgumentParser(description='图神经网络异常检测')
     parser.add_argument('--model', type=str, default='gcn',
                       choices=['gcn', 'gat', 'sage', 'multihop', 'selective', 'anomaly'],
@@ -181,6 +150,8 @@ def main():
                       help='选择要使用的数据集 (tolokers, reddit, questions, weibo, amazon, yelpchi)')
     parser.add_argument('--trials', type=int, default=10,
                       help='实验重复次数')
+    parser.add_argument('--all-models', action='store_true',
+                      help='运行所有支持的模型')
     args = parser.parse_args()
 
     # 配置参数
@@ -199,7 +170,16 @@ def main():
         'dropout': 0.3,   # dropout率
     }
 
-    run_experiment(args.model, args.dataset, args.trials, config)
+    if args.all_models:
+        # 运行所有模型
+        models = get_available_models()
+        print(f"\n=== 在 {args.dataset.upper()} 数据集上运行所有模型 ===")
+        for model in models:
+            print(f"\n--- 模型: {model.upper()} ---")
+            run_experiment(model, args.dataset, args.trials, config)
+    else:
+        # 运行单个模型
+        run_experiment(args.model, args.dataset, args.trials, config)
 
 if __name__ == "__main__":
     main()

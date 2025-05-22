@@ -28,7 +28,7 @@ def evaluate(y_true, logits, mask):
     }
 
 def save_results(results):
-    """保存实验结果到XLSX文件
+    """保存实验结果到CSV文件
     
     Args:
         results: 包含实验结果的字典列表
@@ -63,9 +63,8 @@ def save_results(results):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     model_name = results[0]['model'].lower()
     dataset_name = results[0]['dataset'].lower()
-    trial_num = results[-1]['trial']
-    filename = f'results/{model_name}_{dataset_name}_trials_{trial_num}_{timestamp}.xlsx'
+    filename = f'results/{model_name}_{dataset_name}_{timestamp}.csv'
     
     # 保存结果
-    df.to_excel(filename, index=False)
+    df.to_csv(filename, index=False)
     print(f"\n结果已保存到: {filename}") 
