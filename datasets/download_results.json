@@ -1,6 +1,12 @@
 {
-  "tolokers": "failed",
-  "questions": "failed",
+  "tolokers": {
+    "success": true,
+    "path": "datasets\\tolokers.pt"
+  },
+  "questions": {
+    "success": true,
+    "path": "datasets\\questions.pt"
+  },
   "amazon": "failed",
   "yelpchi": "failed"
 }

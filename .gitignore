@@ -13,3 +13,7 @@ venv/
 # 其他
 *.log
 *.tmp
+*.xlsx
+/results/
+/datasets/
+/datasets_GADBench/
