@@ -15,5 +15,3 @@ venv/
 *.tmp
 *.xlsx
 /results/
-/datasets/
-/datasets_GADBench/

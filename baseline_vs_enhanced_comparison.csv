@@ -1,0 +1,9 @@
+Model,Type,Dataset,AUROC,AUPRC,Std_AUROC,Time,Trials
+GCN,Baseline,Tolokers,0.751,0.4381,0.0102,0.8,20
+GAT,Baseline,Tolokers,0.736,0.3941,0.0253,7.5,20
+GraphSAGE,Baseline,Tolokers,0.8004,0.48,0.0099,0.6,20
+ANS-GCN,Enhanced,Tolokers,0.7313,0.4096,0.0155,3554.0,10
+NS-GAT,Enhanced,Tolokers,0.7388,0.3996,0.023,6609.7,20
+NS-GCN,Enhanced,Tolokers,0.7337,0.4107,0.0152,4838.6,20
+GCN,Baseline,Reddit,0.6143,0.0531,0.0195,0.2,20
+ANS-GCN,Enhanced,Reddit,0.612,0.0517,0.0184,597.4,20
